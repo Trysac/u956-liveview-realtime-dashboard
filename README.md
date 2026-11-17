@@ -1,47 +1,48 @@
-# liveview-realtime-dashboard
+# trysac_liveview_realtime_dashboard
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/Trysac/u956-liveview-realtime-dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/Trysac/u956-liveview-realtime-dashboard/actions/workflows/ci.yml)
+Real-time dashboard hub that folds metric updates into rolling bucketed windows and sends each subscriber one coalesced frame per tick, with acknowledgement-based flow control.
 
-Real-time dashboard hub that folds metric updates into rolling bucketed windows and sends each subscriber one coalesced frame per tick, with acknowledgement-based flow control
+## Why not just use Phoenix PubSub?
 
-## Problem
+A live dashboard that pushes every metric update straight to each viewer floods browsers and server mailboxes once updates reach thousands per minute. A single slow viewer makes the server's memory grow without limit. `Trysac.LiveviewRealtimeDashboard` aggregates updates into rolling bucketed windows, sends each viewer at most one `%Frame{}` of changed series per tick, and holds back frames when a viewer has reached `max_inflight` unacknowledged frames.
 
-Describe in two or three sentences the concrete problem this utility solves, who hits it, and what
-they do today without it. Replace this paragraph when the first real feature lands.
+## Installation
 
-## Install
+Add to your `mix.exs`:
 
 ```elixir
-# mix.exs
 def deps do
-  [{:trysac_liveview_realtime_dashboard, "~> 0.1"}]
+  [{:trysac_liveview_realtime_dashboard, "~> 0.1.0"}]
 end
 ```
-
-Until it is published on Hex, point the dependency at a release tag:
-`{:trysac_liveview_realtime_dashboard, git: "https://github.com/Trysac/u956-liveview-realtime-dashboard", tag: "v0.1.0"}`. Requires Elixir 1.20 or newer on
-Erlang/OTP 29. No dependencies outside the Elixir standard library.
 
 ## Usage
 
 ```elixir
-# normalize trims surrounding whitespace and lower-cases the text.
-Trysac.LiveviewRealtimeDashboard.Text.normalize("  Hello World ")
-#=> "hello world"
+alias Trysac.LiveviewRealtimeDashboard.Hub
 
-# Blank input is rejected explicitly instead of returning an empty string.
-Trysac.LiveviewRealtimeDashboard.Text.normalize("   ")
-#=> ** (Trysac.LiveviewRealtimeDashboard.BlankInputError) input is blank
+{:ok, hub} = Hub.start_link(auto_tick: false, window_ms: 60_000, bucket_ms: 1_000)
+{:ok, ref} = Hub.subscribe(hub, "cpu.*")
+:ok = Hub.publish(hub, "cpu.host1", 42.5, 1_000)
+:ok = Hub.flush(hub, 1_000)
+receive do
+  {:dashboard_frame, ^ref, frame} -> Hub.ack(hub, ref, frame.seq)
+end
 ```
 
-## Documentation
+## API Summary
 
-- [Architecture](docs/ARCHITECTURE.md) and [decisions](docs/decisions/)
-- [Testing](docs/TESTING.md) and [security](docs/SECURITY.md)
-- [Project record](docs/PROJECT.md) and [stack](docs/STACK.md)
-- [Changelog](CHANGELOG.md) and [contributing guide](CONTRIBUTING.md)
+- `Window.new(window_ms, bucket_ms)`: Creates a rolling window.
+- `Window.add(window, ts_ms, value)`: Adds data points.
+- `Window.summary(window, now_ms)`: Returns `%Summary{count, sum, min, max, last, rate_per_min}`.
+- `Hub.start_link(opts)`: Starts the hub process.
+- `Hub.publish(hub, series, value, ts_ms)`: Publishes a metric update.
+- `Hub.subscribe(hub, pattern, pid)`: Subscribes to metric patterns (`"*"` or `"prefix.*"`).
+- `Hub.flush(hub, now_ms)`: Triggers a manual frame push.
+- `Hub.ack(hub, ref, seq)`: Acknowledges a specific frame to release flow control.
 
-## License
+Errors (raised as `Trysac.LiveviewRealtimeDashboard.Error`): `:invalid_series`, `:invalid_value`, `:invalid_option`, `:series_limit`, `:subscriber_limit`, `:unknown_subscription`.
 
-[MIT](LICENSE) (c) 2026 Miguel Gomez
+## Security
+
+See [docs/SECURITY.md](docs/SECURITY.md).
