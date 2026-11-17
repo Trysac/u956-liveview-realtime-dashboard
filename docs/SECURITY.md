@@ -2,28 +2,19 @@
 
 ## Threat model
 
-The Hex package `trysac_liveview_realtime_dashboard` is a pure library without I/O. The main risks are:
+The library `trysac_liveview_realtime_dashboard` is a pure library without I/O side effects, operating on structured input.
 
-- **Supply chain**: a compromised package or CI action. Mitigation: standard library only, every
-  package pinned by the committed `mix.lock` (with its checksums, fetched with
-  `mix deps.get --check-locked`), `mix hex.audit` (retired releases), `mix deps.audit` (the
-  Elixir security advisories) and OSV-Scanner over `mix.lock` in the gates, Dependabot weekly
-  updates, actions pinned by commit SHA, minimal workflow permissions.
-- **Leaked secrets**: tokens committed by mistake. Mitigation: `gitleaks` runs in the local gates
-  and in CI; `.env` files and Hex API keys are never committed.
-- **Insecure code**: code evaluation (`Code.eval_string`), shell command lines (`:os.cmd`,
-  `System.shell`), unsafe deserialization (`:erlang.binary_to_term` without `:safe`), atoms
-  created from input (`String.to_atom`), functions chosen by input (`apply/3`), disabled TLS
-  verification (`:verify_none`). Mitigation: Credo's Warning checks in the lint gate, Dialyzer,
-  and the factory's Semgrep rules (`.semgrep/factory-rules.yml`, `nosemgrep` ignored); fix the
-  code instead of silencing it.
-- **Untrusted input**: callers may pass hostile strings. Mitigation: validate input with guards
-  and pattern matching and raise explicit, documented errors; never turn input into atoms or
-  code.
+### Defended
 
-## Publishing
+- **Hostile Inputs**: The library guards public entry points (`publish`, `subscribe`, `start_link`) by validating inputs against constraints (e.g., regex `~r/^[a-z0-9_.:-]{1,128}$/` for series names). Inputs exceeding 200 characters in error messages are truncated to prevent denial-of-service via memory allocation in error reporting.
+- **Uncontrolled Subscriber Memory**: Subscribers with `max_inflight` frames pending do not queue multiple frames. The hub tracks a `MapSet` of `pending_series` names only, capping memory growth relative to `max_series`.
+- **Process Leaks**: The hub monitors subscriber processes; exit of the subscriber process automatically triggers cleanup of subscriptions.
 
-Releases are git tags; publishing on Hex needs an account, whose API key is never stored in the
-repository.
+### Not defended
 
-To report a vulnerability, see [SECURITY.md](../SECURITY.md).
+- **Caller Privilege**: The hub trusts the PID passed to `subscribe` and the caller of `publish`; it does not implement access control or authentication.
+- **Resource Exhaustion (Memory)**: While per-subscriber memory is capped, the total number of series and subscribers is finite but configurable; misconfiguration (e.g., arbitrarily high limits) is the responsibility of the operator.
+
+## Vulnerabilities
+
+Report vulnerabilities via standard package management security channels; see `mix hex.audit` and `mix deps.audit`.

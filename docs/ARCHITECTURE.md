@@ -1,34 +1,15 @@
 # Architecture
 
-## Purpose
+## Overview
 
-The Hex package `trysac_liveview_realtime_dashboard` is a small, dependency-free Elixir library: Real-time dashboard hub that folds metric updates into rolling bucketed windows and sends each subscriber one coalesced frame per tick, with acknowledgement-based flow control
+`Trysac.LiveviewRealtimeDashboard` is structured into pure window aggregation structs and an OTP `GenServer` hub:
 
-## Shape
+1. **`Trysac.LiveviewRealtimeDashboard.Window`**: Pure functional rolling window dividing `window_ms` into buckets of `bucket_ms` (at most 3,600 buckets). Each bucket maintains `count`, `sum`, `min`, and `max`. Expired buckets (`bucket_start + window_ms <= max_ts`) are pruned on write, and `Window.summary/2` folds active buckets (`bucket_start + window_ms > now_ms`) in O(active_buckets).
+2. **`Trysac.LiveviewRealtimeDashboard.Summary`**: Immutable aggregate (`count`, `sum`, `min`, `max`, `last`, `rate_per_min`).
+3. **`Trysac.LiveviewRealtimeDashboard.Frame`**: Per-subscriber coalesced tick payload (`seq`, `at`, `changes`) with `Frame.to_map/1` for JSON serialization.
+4. **`Trysac.LiveviewRealtimeDashboard.Hub`**: `GenServer` maintaining the map of series windows, subscriber monitors, per-subscriber pending series sets, and inflight frame sets.
+5. **`Trysac.LiveviewRealtimeDashboard.Error`**: Library exception with `:code` and `:message` (truncating caller input previews to at most 200 characters).
 
-```text
-caller code --> Trysac.LiveviewRealtimeDashboard (lib/trysac/liveview_realtime_dashboard.ex)
-                    |
-                    +-- Trysac.LiveviewRealtimeDashboard.* (lib/trysac/liveview_realtime_dashboard/)
-                          +-- modules of pure functions; no processes, no I/O, no global state
-                          +-- @moduledoc false / @doc false helpers (private, optional)
-```
+## Bounded Memory for Slow Subscribers
 
-- **Public API**: every module of `lib/` with a `@moduledoc` and its public functions and macros.
-  Modules marked `@moduledoc false` and functions marked `@doc false` are private and may change
-  without a major version.
-- **Errors**: invalid input raises an exception of the library (such as `BlankInputError`,
-  defined with `defexception`) documented in the function's `@doc`, or the function returns
-  `{:ok, value} | {:error, reason}` when failure is an expected outcome. The library never prints,
-  halts the VM, starts processes or changes application environment.
-- **Side effects**: none. If a feature needs I/O, accept data or a small behaviour instead of
-  opening files, and record the choice in an ADR.
-
-## Quality contract
-
-`scripts/check.exs` is the single definition of the gates; `fabrica.json` tells the factory and CI
-how to run it. See [TESTING.md](TESTING.md).
-
-## Decisions
-
-Architecture decisions are recorded in [decisions/](decisions/) as numbered ADRs.
+When a subscriber has `max_inflight` unacknowledged frames, the hub does not buffer outgoing `%Frame{}` structs. Instead, each subscriber holds a `pending` `MapSet` of changed series names. No matter how many updates arrive while a subscriber is stalled, its `pending` set never exceeds the number of tracked series (`max_series`). Once `Hub.ack/3` frees inflight capacity, the next flush computes fresh `%Summary{}` values for all series in `pending` and delivers them in a single coalesced frame.
