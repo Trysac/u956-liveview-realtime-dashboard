@@ -1,0 +1,1 @@
+{"lang": "elixir", "package": "trysac_liveview_realtime_dashboard", "commands": {"install": [["mix", "deps.get", "--check-locked"]], "check": [["elixir", "scripts/check.exs"]]}}
